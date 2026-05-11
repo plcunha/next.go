@@ -1,17 +1,16 @@
 # Next.go
 
-A Go implementation of Next.js framework concepts - file-system routing, SSR, SSG, API routes, and more.
+A Go implementation of Next.js concepts — file-system routing, SSR, API routes, middleware, and production builds as a single binary.
 
 ## Features
 
-- 🚀 **File-system Routing** - Automatic routing based on file structure (like Next.js App Router)
-- ⚡ **Server-Side Rendering (SSR)** - Render pages on the server
-- 📄 **Static Site Generation (SSG)** - Pre-render pages at build time  
-- 🔌 **API Routes** - Build API endpoints with Go
-- 🔥 **Hot Module Replacement** - Fast refresh in development
-- 🎨 **Middleware Support** - Custom middleware for requests
-- 📦 **Build System** - Optimized production builds
-- 🔒 **Security Built-in** - CORS, rate limiting, security headers
+- **File-system Routing** — Automatic routing based on directory structure (`[id]`, `[...slug]`)
+- **Server-Side Rendering** — Go templates rendered on the server with layout wrapping
+- **API Routes** — Write Go handlers, compiled and executed in dev and production
+- **Middleware** — Logger, CORS, Security headers built-in
+- **Hot Reload** — File watcher re-scans routes on change
+- **Build System** — Minified HTML + compiled API binary (`app.exe`)
+- **Single Binary Deploy** — `nextgo build` produces ~12MB binary, zero runtime deps
 
 ## Installation
 
@@ -29,31 +28,19 @@ go build -o nextgo .
 
 ## Quick Start
 
-### Create a new project
-
 ```bash
 nextgo create my-app
 cd my-app
+nextgo dev                # http://localhost:3000
+nextgo dev -p 8080        # custom port
 ```
 
-### Start development server
+## Build & Production
 
 ```bash
-nextgo dev
-```
-
-The server will start at `http://localhost:3000`
-
-### Build for production
-
-```bash
-nextgo build
-```
-
-### Start production server
-
-```bash
-nextgo start
+nextgo build              # compiles pages + API handlers → .next/
+nextgo start              # serves from .next/
+nextgo start -p 8080      # custom port
 ```
 
 ## Project Structure
@@ -61,32 +48,29 @@ nextgo start
 ```
 my-app/
 ├── app/
-│   ├── layout.go.html    # Root layout (like app/layout.tsx)
-│   ├── page.go.html     # Home page (like app/page.tsx)
+│   ├── layout.go.html      # Root layout
+│   ├── page.go.html        # → /
 │   ├── about/
-│   │   └── page.go.html # About page
+│   │   └── page.go.html    # → /about
 │   └── api/
 │       └── hello/
-│           └── handler.go # API route
-├── public/              # Static assets
-├── components/          # Reusable components
-└── nextgo.yaml         # Configuration (like next.config.js)
+│           └── handler.go  # → /api/hello
+├── public/                 # Static assets
+├── nextgo.yaml             # Configuration
+└── package.json            # npm scripts (optional)
 ```
 
-## File-System Routing
-
-Next.go uses file-system routing similar to Next.js:
+## Routing
 
 | File | URL |
-|------|-----|
+|---|---|
 | `app/page.go.html` | `/` |
 | `app/about/page.go.html` | `/about` |
 | `app/blog/[id]/page.go.html` | `/blog/:id` |
-| `app/blog/[...slug]/page.go.html` | `/blog/*slug` |
+| `app/docs/[...slug]/page.go.html` | `/docs/*slug` |
+| `app/api/hello/handler.go` | `/api/hello` |
 
 ## API Routes
-
-Create API routes in the `app/api` directory:
 
 ```go
 // app/api/hello/handler.go
@@ -97,67 +81,73 @@ import "github.com/gin-gonic/gin"
 func Handler(c *gin.Context) {
     c.JSON(200, gin.H{
         "message": "Hello from Next.go!",
+        "method":  c.Request.Method,
     })
 }
 ```
 
-## Configuration
-
-Create a `nextgo.yaml` file for configuration:
-
-```yaml
-server:
-  port: 3000
-  host: localhost
-  compression: true
-
-build:
-  output: standalone
-  distDir: .next
-
-images:
-  domains:
-    - example.com
-  formats:
-    - image/webp
-
-experimental:
-  appDir: true
-```
+In dev mode, handlers are compiled into a subprocess and executed in real time.
+In production, handlers are compiled into the `app.exe` binary.
 
 ## Templates
 
-Next.go uses `.go.html` files for pages, which are Go templates with HTML:
+`.go.html` files are Go templates with automatic layout wrapping:
 
 ```html
-<!DOCTYPE html>
+<!-- app/layout.go.html -->
 <html>
-<head>
-    <title>{{.title}}</title>
-</head>
+<head><title>{{.title}}</title></head>
 <body>
-    <h1>{{.title}}</h1>
-    <p>{{.content}}</p>
+    <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
+    <main>{{.children}}</main>
 </body>
 </html>
 ```
 
-## Comparison with Next.js
+Available template variables: `{{.title}}`, `{{.path}}`, `{{.children}}` (layout only).
 
-| Feature | Next.js | Next.go |
-|---------|---------|---------|
-| Language | React/Node.js | Go |
-| Routing | File-system | File-system |
-| SSR | ✓ | ✓ |
-| SSG | ✓ | ✓ |
-| API Routes | ✓ | ✓ |
-| Middleware | ✓ | ✓ |
-| Hot Reload | ✓ | ✓ |
+## Configuration
+
+```yaml
+# nextgo.yaml
+server:
+  port: 3000
+  host: localhost
+
+build:
+  output: standalone
+  distDir: .next
+```
+
+## Middleware
+
+Active in dev and production:
+
+| Middleware | Headers |
+|---|---|
+| Recovery | Panic recovery |
+| Logger | `[NEXT-GO] GET / 200 1.1ms` |
+| CORS | `Access-Control-Allow-Origin: *` |
+| Security | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection`, `Referrer-Policy` |
+
+## Feature Status
+
+| Feature | Status |
+|---|---|
+| File-system Routing | ✅ |
+| SSR (dev) | ✅ |
+| SSG (build) | ✅ |
+| API Routes (dev) | ✅ |
+| API Routes (build) | ✅ |
+| Middleware | ✅ |
+| Hot Reload | ✅ |
+| Build → Binary | ✅ |
+| `go install` | ✅ |
+
+## Documentation
+
+See [docs/README.md](docs/README.md) for the complete guide.
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.

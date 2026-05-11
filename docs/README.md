@@ -274,11 +274,11 @@ build:
 - `go install` global
 
 ### ⏳ Pendente
-2. Template execution no build
-3. Hybrid mode (JS frontend)
-4. htmx/Alpine.js support
-5. Partials/slots/templates
-6. Image optimization
-7. ISR
-8. Database integration
-9. Authentication (OAuth, JWT)
+1. Template execution no build
+2. Hybrid mode (JS frontend)
+3. htmx/Alpine.js support
+4. Partials/slots/templates
+5. Image optimization
+6. ISR
+7. Database integration
+8. Authentication (OAuth, JWT)
