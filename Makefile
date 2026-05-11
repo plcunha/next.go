@@ -1,13 +1,13 @@
-.PHONY: build dev test clean install
+.PHONY: build dev test clean install tidy build-all create example
 
 # Build the nextgo binary
 build:
-	go build -o nextgo ./main.go
-	@echo "✓ Built nextgo binary"
+	go build -o nextgo .
+	@echo "Built nextgo binary"
 
 # Run in development mode
 dev:
-	go run main.go dev
+	go run . dev
 
 # Run tests
 test:
@@ -15,14 +15,16 @@ test:
 
 # Clean build artifacts
 clean:
-	rm -f nextgo
-	rm -rf .next
-	rm -rf dist
+	if exist nextgo del nextgo
+	if exist .next rmdir /s /q .next
+	if exist dist rmdir /s /q dist
 
-# Install globally
+# Install globally (equivalent to npm install -g next)
+# Usage: make install
+# After install, run: nextgo --help
 install:
-	go install ./...
-	@echo "✓ Installed nextgo globally"
+	go install .
+	@echo "Installed nextgo globally to %GOPATH%\bin"
 
 # Tidy modules
 tidy:
@@ -30,14 +32,14 @@ tidy:
 
 # Build for multiple platforms
 build-all:
-	GOOS=linux GOARCH=amd64 go build -o dist/nextgo-linux-amd64 ./main.go
-	GOOS=darwin GOARCH=amd64 go build -o dist/nextgo-darwin-amd64 ./main.go
-	GOOS=windows GOARCH=amd64 go build -o dist/nextgo-windows-amd64.exe ./main.go
-	@echo "✓ Built for all platforms"
+	GOOS=linux GOARCH=amd64 go build -o dist/nextgo-linux-amd64 .
+	GOOS=darwin GOARCH=amd64 go build -o dist/nextgo-darwin-amd64 .
+	GOOS=windows GOARCH=amd64 go build -o dist/nextgo-windows-amd64.exe .
+	@echo "Built for all platforms"
 
 # Create a new project
 create:
-	go run main.go create my-app
+	go run . create my-app
 
 # Run example
 example:

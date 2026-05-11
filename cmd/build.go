@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/nextgo/nextgo/packages/build"
@@ -24,19 +23,5 @@ var buildCmd = &cobra.Command{
 		}
 
 		fmt.Println("Build complete! Output: .next/")
-
-		// Create .next directory structure
-		nextDir := filepath.Join(dir, ".next")
-		dirs := []string{
-			"server",
-			"static",
-			"server/app",
-			"static/chunks",
-			"cache",
-		}
-
-		for _, d := range dirs {
-			os.MkdirAll(filepath.Join(nextDir, d), 0755)
-		}
 	},
 }

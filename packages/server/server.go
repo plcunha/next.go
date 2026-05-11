@@ -11,19 +11,22 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nextgo/nextgo/packages/apihandler"
 	"github.com/nextgo/nextgo/packages/config"
+	"github.com/nextgo/nextgo/packages/middleware"
 	"github.com/nextgo/nextgo/packages/router"
 	"github.com/nextgo/nextgo/packages/watcher"
 )
 
 // Server represents the Next.go server
 type Server struct {
-	Router  *router.Router
-	AppDir  string
-	Port    string
-	DevMode bool
-	gin     *gin.Engine
-	mu      sync.RWMutex
+	Router      *router.Router
+	AppDir      string
+	Port        string
+	DevMode     bool
+	gin         *gin.Engine
+	apiDev      *apihandler.DevServer
+	mu          sync.RWMutex
 }
 
 // New creates a new server instance
@@ -56,10 +59,27 @@ func (s *Server) Start(port string) error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	s.gin = gin.Default()
+	s.gin = gin.New()
 
-	// Add middleware
-	s.gin.Use(s.loggingMiddleware())
+	// Middleware chain
+	s.gin.Use(gin.Recovery())
+	if s.DevMode {
+		s.gin.Use(s.loggingMiddleware())
+	} else {
+		s.gin.Use(middleware.Logger())
+	}
+	s.gin.Use(middleware.CORS())
+	s.gin.Use(middleware.Security())
+
+	// Start API dev server (compiles handlers into subprocess)
+	if s.DevMode {
+		s.apiDev = apihandler.New(s.AppDir)
+		if err := s.apiDev.Start(); err != nil {
+			fmt.Printf("  ⚠️ API dev server: %v (handlers will return placeholder)\n", err)
+		} else if s.apiDev.HasHandlers() {
+			fmt.Printf("  ✓ API handlers compiled and running\n")
+		}
+	}
 
 	// Register file-system routes
 	s.registerRoutes()
@@ -76,6 +96,12 @@ func (s *Server) Start(port string) error {
 		go watcher.Watch(s.AppDir, func() {
 			fmt.Println("🔄 File changed, re-scanning routes...")
 			s.Router.Scan()
+			// Reload API handlers if they changed
+			if s.apiDev != nil {
+				if err := s.apiDev.Reload(); err != nil {
+					fmt.Printf("  ⚠️ API reload: %v\n", err)
+				}
+			}
 		})
 	}
 
@@ -157,7 +183,7 @@ func (s *Server) renderPage(c *gin.Context, route *router.Route) {
 
 	// Prepare data
 	data := gin.H{
-		"title": filepath.Base(route.Path),
+		"title": titleFromPath(route.Path),
 		"path":  c.Request.URL.Path,
 	}
 
@@ -173,12 +199,19 @@ func (s *Server) renderPage(c *gin.Context, route *router.Route) {
 
 // renderAPI renders an API route
 func (s *Server) renderAPI(c *gin.Context, route *router.Route) {
-	// For Go handler files, we would load and execute them
-	// For now, return JSON response
+	// Proxy to compiled API dev server if available
+	if s.apiDev != nil && s.apiDev.HasHandlers() {
+		if proxy := s.apiDev.Proxy(); proxy != nil {
+			proxy.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+	}
+
+	// Fallback: return placeholder
 	c.JSON(http.StatusOK, gin.H{
-		"message": "API Route",
-		"path":    route.Path,
+		"route":   route.Path,
 		"method":  c.Request.Method,
+		"handler": route.FilePath,
 	})
 }
 
@@ -247,4 +280,19 @@ func (s *Server) loggingMiddleware() gin.HandlerFunc {
 			fmt.Printf("[%s] %s %d %v\n", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
 		}
 	}
+}
+
+// titleFromPath derives a page title from a route path
+func titleFromPath(path string) string {
+	if path == "/" {
+		return "Home"
+	}
+	p := strings.Trim(path, "/")
+	if last := strings.LastIndex(p, "/"); last >= 0 {
+		p = p[last+1:]
+	}
+	// Convert kebab-case or snake_case to Title Case
+	p = strings.ReplaceAll(p, "-", " ")
+	p = strings.ReplaceAll(p, "_", " ")
+	return strings.Title(p)
 }

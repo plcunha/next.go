@@ -1,0 +1,7 @@
+server:
+  port: 3000
+  host: localhost
+
+build:
+  output: standalone
+  distDir: .next

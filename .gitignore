@@ -20,7 +20,7 @@ vendor/
 # Next.go output
 .next/
 dist/
-build/
+/build/
 
 # Node.js (if used alongside)
 node_modules/

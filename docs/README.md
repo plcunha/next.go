@@ -1,129 +1,120 @@
-# Next.go Documentation
+# Next.go - Guia Completo
 
-Welcome to Next.go - A Go implementation of Next.js framework concepts.
+Next.go é uma implementação em Go dos conceitos de **file-system routing** e **server-side rendering** do Next.js. Aplicações web com o paradigma do Next.js — Go + templates HTML, sem JavaScript no frontend.
 
-## Table of Contents
+---
 
-1. [Getting Started](#getting-started)
-2. [Project Structure](#project-structure)
-3. [Routing](#routing)
-4. [Pages and Layouts](#pages-and-layouts)
-5. [API Routes](#api-routes)
-6. [Configuration](#configuration)
-7. [CLI Commands](#cli-commands)
-8. [Build and Deployment](#build-and-deployment)
+## Instalação
 
-## Getting Started
+### Pré-requisitos
 
-### Prerequisites
+- Go 1.21+ ([go.dev/dl](https://go.dev/dl/))
+- `$GOPATH/bin` no PATH:
 
-- Go 1.21 or later
-
-### Installation
+```powershell
+# Windows - permanente
+[Environment]::SetEnvironmentVariable("PATH", "$env:PATH;$env:USERPROFILE\go\bin", "User")
+```
 
 ```bash
+# Linux/macOS
+echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
+```
+
+### Instalar
+
+```bash
+# Da rede (repo público):
 go install github.com/nextgo/nextgo@latest
+
+# Ou do source local:
+cd next.go
+go install .
 ```
 
-Or build from source:
+### Verificar
 
 ```bash
-git clone https://github.com/nextgo/nextgo.git
-cd nextgo
-go build -o nextgo .
+nextgo --help
 ```
 
-### Create Your First App
+---
+
+## Quick Start
 
 ```bash
 nextgo create my-app
 cd my-app
-nextgo dev
+nextgo dev              # http://localhost:3000
+nextgo dev -p 8080      # porta customizada
 ```
 
-Visit `http://localhost:3000` to see your app.
-
-## Project Structure
+### Estrutura do projeto
 
 ```
 my-app/
-├── app/                    # App directory (like Next.js App Router)
-│   ├── layout.go.html     # Root layout
-│   ├── page.go.html      # Home page
+├── app/
+│   ├── layout.go.html      # Layout global
+│   ├── page.go.html        # → /
 │   ├── about/
-│   │   └── page.go.html  # About page
-│   └── api/              # API routes
+│   │   └── page.go.html    # → /about
+│   └── api/
 │       └── hello/
-│           └── handler.go
-├── public/               # Static assets
-├── components/           # Reusable components
-├── lib/                  # Utility functions
-├── nextgo.yaml          # Configuration
-└── package.json         # (optional) for Node.js tooling
+│           └── handler.go  # → /api/hello
+├── public/                 # Arquivos estáticos
+├── nextgo.yaml             # Configuração
+└── package.json            # Scripts (npm scripts opcionais)
 ```
 
-## Routing
+---
 
-Next.go uses file-system routing similar to Next.js App Router.
+## Rotas
 
-### Basic Routes
+### File-system routing
 
-| File | URL Path |
-|------|----------|
-| `app/page.go.html` | `/` |
-| `app/about/page.go.html` | `/about` |
-| `app/blog/page.go.html` | `/blog` |
+| Arquivo | Rota | Tipo |
+|---|---|---|
+| `app/page.go.html` | `/` | Page SSR |
+| `app/about/page.go.html` | `/about` | Page SSR |
+| `app/blog/[id]/page.go.html` | `/blog/:id` | Dinâmica |
+| `app/docs/[...slug]/page.go.html` | `/docs/*slug` | Catch-all |
+| `app/api/hello/handler.go` | `/api/hello` | API |
 
-### Dynamic Routes
+### Ignorados
 
-| File | URL Path |
-|------|----------|
-| `app/blog/[id]/page.go.html` | `/blog/:id` |
-| `app/docs/[...slug]/page.go.html` | `/docs/*slug` |
+`layout.go.html`, `loading.go.html`, `error.go.html`, `not-found.go.html`, arquivos com `_` ou `.`
 
-## Pages and Layouts
+---
 
-### Pages
+## Páginas e Templates
 
-Pages are `.go.html` files that contain HTML with Go template syntax:
+### Page
 
 ```html
-<!-- app/about/page.go.html -->
-<div class="about">
-    <h1>About Us</h1>
-    <p>Welcome to our website!</p>
-</div>
-
-<style>
-.about h1 { color: #000; }
-</style>
+<div><h1>Minha Página</h1><p>Conteúdo SSR.</p></div>
 ```
 
-### Layouts
-
-Layouts wrap pages and persist across navigations:
+### Layout
 
 ```html
-<!-- app/layout.go.html -->
-<!DOCTYPE html>
 <html>
-<head>
-    <title>{{.title}}</title>
-</head>
+<head><title>{{.title}}</title></head>
 <body>
-    <nav><!-- navigation --></nav>
+    <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
     <main>{{.children}}</main>
-    <footer><!-- footer --></footer>
 </body>
 </html>
 ```
 
+O layout envolve páginas do mesmo nível ou abaixo automaticamente.
+
+---
+
 ## API Routes
 
-Create API routes in `app/api` directory:
+`app/api/<rota>/handler.go`:
 
 ```go
-// app/api/users/handler.go
 package main
 
 import "github.com/gin-gonic/gin"
@@ -131,128 +122,163 @@ import "github.com/gin-gonic/gin"
 func Handler(c *gin.Context) {
     switch c.Request.Method {
     case "GET":
-        c.JSON(200, gin.H{"users": []string{"John", "Jane"}})
+        c.JSON(200, gin.H{"users": []string{"Alice", "Bob"}})
     case "POST":
-        c.JSON(201, gin.H{"message": "User created"})
+        var body map[string]interface{}
+        c.ShouldBindJSON(&body)
+        c.JSON(201, gin.H{"created": body})
+    default:
+        c.JSON(405, gin.H{"error": "Method not allowed"})
     }
 }
 ```
 
-## Configuration
+**No dev mode:** handlers são compilados automaticamente num subprocesso e executados em tempo real.
+**No build:** handlers são compilados no binário `app.exe`.
 
-Configure your app with `nextgo.yaml`:
+---
+
+## Build
+
+```bash
+nextgo build
+```
+
+O build:
+1. Minifica páginas HTML → `.next/server/app/`
+2. Copia handlers API → `.next/build/handlers/`
+3. Gera `main.go` + `go.mod`
+4. Compila `app.exe` → `.next/server/app.exe` (~12MB)
+5. Copia assets estáticos → `.next/static/`
+6. Gera `build-manifest.json`
+
+### Executar produção
+
+```bash
+nextgo start              # :3000
+nextgo start -p 8080      # :8080
+
+# Ou direto o binário compilado:
+.next/server/app.exe      # :3000 (ou $PORT)
+```
+
+---
+
+## Middleware
+
+Ativado automaticamente em dev e produção:
+
+| Middleware | Função |
+|---|---|
+| `gin.Recovery()` | Recuperação de panics |
+| `middleware.Logger()` | Log de requests `[NEXT-GO] GET / 200 1.1ms` |
+| `middleware.CORS()` | Headers CORS completos |
+| `middleware.Security()` | `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy` |
+
+Headers verificados:
+```
+Access-Control-Allow-Origin: *
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Referrer-Policy: strict-origin-when-cross-origin
+```
+
+---
+
+## Configuração
+
+`nextgo.yaml`:
 
 ```yaml
 server:
   port: 3000
   host: localhost
-  compression: true
 
 build:
   output: standalone
   distDir: .next
-
-images:
-  domains:
-    - example.com
-  formats:
-    - image/webp
-
-experimental:
-  appDir: true
 ```
 
-## CLI Commands
+---
 
-### `nextgo dev`
+## CLI Reference
 
-Starts the development server with hot reload.
+| Comando | Descrição |
+|---|---|
+| `nextgo create <nome>` | Cria novo projeto |
+| `nextgo dev [-p port]` | Dev server com hot reload |
+| `nextgo build` | Build produção (páginas + API compilada) |
+| `nextgo start [-p port]` | Server produção |
+| `nextgo --help` | Ajuda |
 
-```bash
-nextgo dev
-# Options:
-#   -p, --port <port>    Port to run the server (default: 3000)
-```
+---
 
-### `nextgo build`
+## Status das Features
 
-Builds the app for production.
+| Feature | Status | Detalhes |
+|---|---|---|
+| File-system Routing | ✅ | `[id]`, `[...slug]`, layouts |
+| SSR (dev) | ✅ | Templates Go com layout wrapping |
+| SSG (build) | ✅ | HTML minificado + manifest |
+| API Routes (build) | ✅ | Compiladas em `app.exe` |
+| API Routes (dev) | ✅ | Compilados em subprocesso, executados em tempo real |
+| Middleware | ✅ | Logger + CORS + Security |
+| Hot Reload | ✅ | Watcher + re-scan |
+| Build → Binary | ✅ | `app.exe` ~12MB |
+| `go install` | ✅ | Global via `$GOPATH/bin` |
+| Templates no build | ⚠️ | HTML concatenado; `{{.var}}` não executado |
 
-```bash
-nextgo build
-```
+---
 
-Output will be in `.next/` directory.
+## Quando usar ✅
 
-### `nextgo start`
+- Blogs, portfolios, landing pages
+- APIs com páginas de admin
+- Microserviços com UI leve
+- Performance/memória crítica
+- Times Go que querem SSR sem Node.js
+- Deploy com 1 binário
 
-Starts the production server.
+## Quando não usar ❌
 
-```bash
-nextgo start
-```
+- Apps web interativos (precisa React/SPA)
+- UIs complexas com estado
+- E-commerce com carrinho
+- PWA mobile-first
 
-### `nextgo create <project-name>`
+---
 
-Creates a new Next.go project.
+## Benchmark
 
-```bash
-nextgo create my-app
-```
+| Métrica | Next.js | Next.go |
+|---|---|---|
+| Startup | 2-5s | ~50ms |
+| Memória idle | 150-300MB | 10-20MB |
+| Binário | node_modules ~300MB | ~20MB |
+| Deploy | npm install + build | 1 binário |
 
-## Build and Deployment
+---
 
-### Build for Production
+## Roadmap
 
-```bash
-nextgo build
-```
+### ✅ Implementado
+- File-system routing (`[id]`, `[...slug]`)
+- SSR com layout wrapping
+- Build com minificação HTML
+- API routes compiladas em `app.exe` (build)
+- API routes compiladas em subprocesso (dev)
+- Middleware chain (Logger, CORS, Security)
+- Build manifest
+- Hot reload
+- `go install` global
 
-### Start Production Server
-
-```bash
-nextgo start
-# Or with custom port
-PORT=8080 nextgo start
-```
-
-### Deploy
-
-Since Next.go compiles to a single binary, deployment is simple:
-
-1. Build for your target platform
-2. Copy the binary and `.next` directory
-3. Run the binary
-
-```bash
-# Build for Linux
-GOOS=linux GOARCH=amd64 go build -o nextgo .
-
-# Copy to server
-scp nextgo user@server:/app/
-scp -r .next user@server:/app/
-
-# On server
-cd /app && ./nextgo start
-```
-
-## Comparison with Next.js
-
-| Feature | Next.js | Next.go |
-|---------|---------|---------|
-| Language | JavaScript/TypeScript + React | Go + HTML Templates |
-| Routing | File-system | File-system |
-| SSR | ✓ | ✓ |
-| SSG | ✓ | ✓ |
-| API Routes | ✓ | ✓ |
-| Middleware | ✓ | ✓ |
-| Hot Reload | ✓ | ✓ |
-| Build Output | Node.js server | Go binary |
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
+### ⏳ Pendente
+2. Template execution no build
+3. Hybrid mode (JS frontend)
+4. htmx/Alpine.js support
+5. Partials/slots/templates
+6. Image optimization
+7. ISR
+8. Database integration
+9. Authentication (OAuth, JWT)

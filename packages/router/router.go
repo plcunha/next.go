@@ -109,7 +109,8 @@ func (r *Router) processFile(path string) {
 	switch {
 	case name == "page":
 		routeType = RouteTypePage
-	case strings.Contains(relPath, string(os.PathSeparator)+"api"+string(os.PathSeparator)):
+	case strings.HasPrefix(relPath, "api"+string(os.PathSeparator)),
+		strings.Contains(relPath, string(os.PathSeparator)+"api"+string(os.PathSeparator)):
 		routeType = RouteTypeAPI
 	default:
 		// Custom page (e.g., about.go.html creates /about)
