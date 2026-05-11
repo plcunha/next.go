@@ -1,0 +1,18 @@
+server:
+  port: 3000
+  host: localhost
+  compression: true
+
+build:
+  output: standalone
+  distDir: .next
+  generateBuildManifest: true
+
+images:
+  domains: []
+  formats:
+    - image/webp
+
+experimental:
+  appDir: true
+  turbopack: false

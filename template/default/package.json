@@ -1,0 +1,14 @@
+{
+  "name": "my-nextgo-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Next.go application",
+  "scripts": {
+    "dev": "nextgo dev",
+    "build": "nextgo build",
+    "start": "nextgo start"
+  },
+  "keywords": ["nextgo", "go", "framework"],
+  "author": "",
+  "license": "MIT"
+}

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{.title}}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+        h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+        .blog-post { 
+            border: 1px solid #ddd; 
+            padding: 1.5rem; 
+            margin-bottom: 1rem;
+            border-radius: 8px;
+        }
+        .blog-post h2 { margin-bottom: 0.5rem; }
+        .date { color: #666; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Blog Posts</h1>
+        {{range .posts}}
+        <div class="blog-post">
+            <h2>{{.title}}</h2>
+            <p class="date">{{.date}}</p>
+            <p>{{.excerpt}}</p>
+        </div>
+        {{end}}
+    </div>
+</body>
+</html>
