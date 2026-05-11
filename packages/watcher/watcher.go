@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -11,10 +12,10 @@ import (
 
 // Watcher watches for file changes and triggers hot reload
 type Watcher struct {
-	AppDir     string
-	OnChange   func()
-	watcher    *fsnotify.Watcher
-	debounce   map[string]time.Time
+	AppDir   string
+	OnChange func()
+	watcher  *fsnotify.Watcher
+	debounce map[string]time.Time
 }
 
 // New creates a new file watcher
@@ -151,27 +152,11 @@ func shouldIgnore(path string) bool {
 	}
 
 	for _, ignore := range ignored {
-		if contains(path, ignore) {
+		if strings.Contains(path, ignore) {
 			return true
 		}
 	}
 
-	return false
-}
-
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && 
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
-		 findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
 	return false
 }
 
