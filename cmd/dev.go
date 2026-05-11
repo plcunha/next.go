@@ -51,7 +51,6 @@ var devCmd = &cobra.Command{
 
 func init() {
 	devCmd.Flags().StringP("port", "p", "", "Port to run the development server")
-	rootCmd.AddCommand(devCmd)
 }
 
 func initProject(dir string) {

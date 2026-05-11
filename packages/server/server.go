@@ -244,7 +244,7 @@ func (s *Server) loggingMiddleware() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 		if s.DevMode {
-			fmt.Printf("[%s] %s %s %v\n", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
+			fmt.Printf("[%s] %s %d %v\n", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
 		}
 	}
 }

@@ -35,13 +35,17 @@ func New(appDir string) (*Watcher, error) {
 }
 
 // Watch starts watching for file changes
-func Watch(appDir string) {
+// Watch starts watching for file changes with an optional reload callback
+func Watch(appDir string, onChange func()) {
 	w, err := New(appDir)
 	if err != nil {
 		fmt.Printf("Watcher error: %v\n", err)
 		return
 	}
 
+	if onChange != nil {
+		w.OnChange = onChange
+	}
 	go w.watch()
 }
 

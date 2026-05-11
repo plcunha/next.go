@@ -144,7 +144,7 @@ type FileSystem struct {
 
 // Open opens a file from the filesystem
 func (f FileSystem) Open(name string) (http.File, error) {
-	return f.fs.Open(name)
+	return http.FS(f.fs).Open(name)
 }
 
 // WalkDir walks through a directory and calls fn for each file

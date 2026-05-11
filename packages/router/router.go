@@ -164,11 +164,11 @@ func (r *Router) dirToURLPath(dir string) string {
 
 // processDynamicSegments processes dynamic route segments
 func (r *Router) processDynamicSegments(path string) string {
+	// Handle catch-all [...slug] → *slug (must come before [id] → :id)
+	path = strings.ReplaceAll(path, "[...", "*")
 	// Replace [id] with :id
 	path = strings.ReplaceAll(path, "[", ":")
 	path = strings.ReplaceAll(path, "]", "")
-	// Handle catch-all [...slug]
-	path = strings.ReplaceAll(path, "...", "*")
 	return path
 }
 

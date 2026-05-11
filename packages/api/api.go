@@ -86,7 +86,7 @@ func getHandlersFromFile(filePath string) map[string]gin.HandlerFunc {
 	handlers := make(map[string]gin.HandlerFunc)
 
 	// Read file content
-	content, err := os.ReadFile(filePath)
+	_, err := os.ReadFile(filePath)
 	if err != nil {
 		return handlers
 	}
