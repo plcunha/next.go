@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,21 +18,46 @@ import (
 
 // Builder handles building the Next.go application
 type Builder struct {
-	AppDir  string
-	OutDir  string
-	StartAt time.Time
-	pages   []string
-	files   map[string]string
+	AppDir    string
+	OutDir    string
+	StartAt   time.Time
+	pages     []string
+	files     map[string]string
+	nextgoDir string // resolved source directory of next.go itself
 }
 
 // New creates a new builder
 func New(appDir string) *Builder {
 	return &Builder{
-		AppDir: appDir,
-		OutDir: filepath.Join(appDir, ".next"),
-		pages:  make([]string, 0),
-		files:  make(map[string]string),
+		AppDir:    appDir,
+		OutDir:    filepath.Join(appDir, ".next"),
+		pages:     make([]string, 0),
+		files:     make(map[string]string),
+		nextgoDir: nextgoSourceDir(),
 	}
+}
+
+// nextgoSourceDir finds the next.go module root using runtime.Caller.
+// This is the reliable way to locate the source regardless of where the
+// binary is installed — no GOPATH or hardcoded paths needed.
+func nextgoSourceDir() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	dir := filepath.Dir(filename)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			abs, _ := filepath.Abs(dir)
+			return abs
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }
 
 // Build builds the application for production
@@ -124,7 +150,6 @@ func (b *Builder) buildPages() error {
 func (b *Builder) buildPage(pagePath string) error {
 	relPath, _ := filepath.Rel(filepath.Join(b.AppDir, "app"), pagePath)
 	pageName := filepath.ToSlash(strings.TrimSuffix(relPath, filepath.Ext(relPath)))
-	// Normalize "page.go" → "page" for App Router convention
 	pageName = strings.TrimSuffix(pageName, ".go")
 
 	content, err := os.ReadFile(pagePath)
@@ -132,17 +157,17 @@ func (b *Builder) buildPage(pagePath string) error {
 		return err
 	}
 
-	layoutPath := filepath.Join(filepath.Dir(pagePath), "layout.go.html")
-	layoutContent, _ := os.ReadFile(layoutPath)
-
+	// Find and apply layout
 	var finalContent []byte
-	if len(layoutContent) > 0 {
+	layoutContent := b.findLayoutForPage(pagePath)
+	if layoutContent != nil {
 		combined := strings.Replace(string(layoutContent), "{{.children}}", string(content), 1)
 		finalContent = []byte(combined)
 	} else {
 		finalContent = content
 	}
 
+	// Minify
 	m := minify.New()
 	m.AddFunc("text/html", html.Minify)
 	m.AddFunc("text/css", css.Minify)
@@ -171,10 +196,31 @@ func (b *Builder) buildPage(pagePath string) error {
 	return nil
 }
 
+// findLayoutForPage walks up from the page to find a layout.go.html
+func (b *Builder) findLayoutForPage(pagePath string) []byte {
+	dir := filepath.Dir(pagePath)
+	appDir := filepath.Join(b.AppDir, "app")
+
+	for {
+		layoutPath := filepath.Join(dir, "layout.go.html")
+		if content, err := os.ReadFile(layoutPath); err == nil {
+			return content
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || parent == appDir || !strings.HasPrefix(parent, appDir) {
+			break
+		}
+		dir = parent
+	}
+	return nil
+}
+
 // handlerInfo describes a discovered API handler
 type handlerInfo struct {
 	relPath string
 	route   string
+	pkgName string
+	dir     string
 }
 
 // buildAPIRoutes scans API handlers, generates Go code and compiles
@@ -189,7 +235,7 @@ func (b *Builder) buildAPIRoutes() error {
 
 	var handlers []handlerInfo
 
-	_ = filepath.Walk(apiDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(apiDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
@@ -198,16 +244,28 @@ func (b *Builder) buildAPIRoutes() error {
 		}
 		relPath, _ := filepath.Rel(apiDir, path)
 		relPath = filepath.ToSlash(relPath)
-		dir := filepath.Dir(relPath)
+		hDir := filepath.Dir(relPath)
 		route := "/api"
-		if dir != "." {
-			route = "/api/" + filepath.ToSlash(dir)
+		if hDir != "." {
+			route = "/api/" + filepath.ToSlash(hDir)
 		}
-		handlers = append(handlers, handlerInfo{relPath: relPath, route: route})
+		pkgName := filepath.Base(hDir)
+		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
+			pkgName = "root"
+		}
+		handlers = append(handlers, handlerInfo{
+			relPath: relPath,
+			route:   route,
+			pkgName: sanitizePkgName(pkgName),
+			dir:     hDir,
+		})
 		fmt.Printf("    ✓ API: %s → %s\n", relPath, route)
 		b.files["api/"+relPath] = route
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
 	if len(handlers) == 0 {
 		return nil
@@ -215,20 +273,14 @@ func (b *Builder) buildAPIRoutes() error {
 
 	// Copy handler files, changing package main to correct package name
 	for _, h := range handlers {
-		src := filepath.Join(apiDir, h.relPath)
-		dst := filepath.Join(b.OutDir, "build", "handlers", h.relPath)
+		src := filepath.Join(apiDir, filepath.FromSlash(h.relPath))
+		dst := filepath.Join(b.OutDir, "build", "handlers", h.dir, "handler.go")
 		os.MkdirAll(filepath.Dir(dst), 0755)
 		data, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("read handler %s: %w", h.relPath, err)
 		}
-		// Change "package main" to "package <dir>"
-		dir := filepath.Dir(h.relPath)
-		pkgName := filepath.Base(dir)
-		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
-			pkgName = "root"
-		}
-		content := strings.Replace(string(data), "package main", "package "+pkgName, 1)
+		content := strings.Replace(string(data), "package main", "package "+h.pkgName, 1)
 		if err := os.WriteFile(dst, []byte(content), 0644); err != nil {
 			return err
 		}
@@ -239,36 +291,50 @@ func (b *Builder) buildAPIRoutes() error {
 		return err
 	}
 
-	// Generate go.mod
+	// Generate go.mod with proper replace to the detected next.go source
 	if err := b.generateBuildGoMod(); err != nil {
 		return err
 	}
 
-	// Tidy modules and download dependencies
+	// Copy parent go.sum as a starting point so go mod tidy doesn't
+	// have to resolve everything from scratch
+	parentGoSum := filepath.Join(b.nextgoDir, "go.sum")
+	if data, err := os.ReadFile(parentGoSum); err == nil {
+		os.WriteFile(filepath.Join(b.OutDir, "build", "go.sum"), data, 0644)
+	}
+
+	// Tidy modules and download dependencies.
+	// The -e flag ignores packages that can't be loaded (e.g., test deps
+	// that require newer Go toolchains), which keeps builds working on
+	// machines without the latest Go.
 	fmt.Println("  Resolving dependencies...")
-	tidyCmd := exec.Command("go", "mod", "tidy")
+	tidyCmd := exec.Command("go", "mod", "tidy", "-e")
 	tidyCmd.Dir = filepath.Join(b.OutDir, "build")
 	tidyCmd.Stdout = os.Stdout
 	tidyCmd.Stderr = os.Stderr
+	tidyCmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if err := tidyCmd.Run(); err != nil {
 		return fmt.Errorf("go mod tidy: %w", err)
 	}
 
 	// Compile
-	fmt.Println("  Compiling API server...")
+	fmt.Println("  Compiling production server...")
 	cmd := exec.Command("go", "build", "-o", filepath.Join(b.OutDir, "server", "app.exe"), ".")
 	cmd.Dir = filepath.Join(b.OutDir, "build")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("compile API server: %w (Go must be installed and on PATH)", err)
+		return fmt.Errorf("compile production server: %w (Go must be installed and on PATH)", err)
 	}
 
 	fmt.Println("    ✓ Compiled app.exe")
 	return nil
 }
 
-// generateBuildMain creates main.go for the compiled production server
+// generateBuildMain creates main.go for the compiled production server.
+// It imports all handler packages and registers them, serves pre-rendered
+// pages from .next/server/app/, and serves static assets.
 func (b *Builder) generateBuildMain(handlers []handlerInfo) error {
 	var sb strings.Builder
 	sb.WriteString("package main\n\n")
@@ -284,16 +350,11 @@ func (b *Builder) generateBuildMain(handlers []handlerInfo) error {
 
 	// Import handler packages
 	for _, h := range handlers {
-		dir := filepath.Dir(h.relPath)
-		pkgName := filepath.Base(dir)
-		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
-			pkgName = "root"
-		}
-		importPath := "nextgo-build/handlers/" + dir
+		importPath := "nextgo-build/handlers/" + h.dir
 		if importPath == "nextgo-build/handlers/" {
 			importPath = "nextgo-build/handlers"
 		}
-		sb.WriteString(fmt.Sprintf("\t%s \"%s\"\n", pkgName, importPath))
+		sb.WriteString(fmt.Sprintf("\t%s \"%s\"\n", h.pkgName, importPath))
 	}
 	sb.WriteString(")\n\n")
 
@@ -308,15 +369,15 @@ func (b *Builder) generateBuildMain(handlers []handlerInfo) error {
 	sb.WriteString("\tr.Use(middleware.CORS())\n")
 	sb.WriteString("\tr.Use(middleware.Security())\n\n")
 
-	// Serve static files
+	// Static assets
 	sb.WriteString("\t// Static assets\n")
 	sb.WriteString("\tbuildDir := filepath.Dir(os.Args[0])\n")
 	sb.WriteString("\tstaticDir := filepath.Join(buildDir, \"..\", \"static\")\n")
 	sb.WriteString("\tr.StaticFS(\"/_next/static\", http.Dir(staticDir))\n")
 	sb.WriteString("\tr.StaticFS(\"/public\", http.Dir(staticDir))\n\n")
 
-	// Serve pre-rendered pages
-	sb.WriteString("\t// SSR Pages\n")
+	// Serve pre-rendered pages (SSG)
+	sb.WriteString("\t// Pre-rendered pages (SSG)\n")
 	sb.WriteString("\tpagesDir := filepath.Join(buildDir, \"..\", \"server\", \"app\")\n")
 	sb.WriteString("\tr.NoRoute(func(c *gin.Context) {\n")
 	sb.WriteString("\t\tpath := c.Request.URL.Path\n")
@@ -338,13 +399,8 @@ func (b *Builder) generateBuildMain(handlers []handlerInfo) error {
 
 	// Register API handlers
 	for _, h := range handlers {
-		dir := filepath.Dir(h.relPath)
-		pkgName := filepath.Base(dir)
-		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
-			pkgName = "root"
-		}
 		sb.WriteString(fmt.Sprintf("\t// Route: %s\n", h.route))
-		sb.WriteString(fmt.Sprintf("\tr.Any(\"%s\", %s.Handler)\n\n", h.route, pkgName))
+		sb.WriteString(fmt.Sprintf("\tr.Any(\"%s\", %s.Handler)\n\n", h.route, h.pkgName))
 	}
 
 	sb.WriteString("\t// Start server\n")
@@ -360,46 +416,68 @@ func (b *Builder) generateBuildMain(handlers []handlerInfo) error {
 	return os.WriteFile(mainPath, []byte(sb.String()), 0644)
 }
 
-// generateBuildGoMod creates go.mod for the build project
+// generateBuildGoMod creates go.mod for the build project.
+// Uses the detected next.go source directory for the replace directive.
 func (b *Builder) generateBuildGoMod() error {
-	goMod := `module nextgo-build
+	nextgoPath := b.nextgoDir
+	if nextgoPath == "" {
+		// Fallback: try common locations
+		nextgoPath = detectNextGoPathFallback()
+	}
+	if nextgoPath == "" {
+		return fmt.Errorf("cannot find next.go source directory — run from within the next.go repository or set NEXTGO_SRC")
+	}
 
-go 1.21
+	// Use absolute path for the replace directive
+	absPath, err := filepath.Abs(nextgoPath)
+	if err != nil {
+		return fmt.Errorf("resolve next.go path: %w", err)
+	}
+
+	goMod := fmt.Sprintf(`module nextgo-build
+
+go 1.22
 
 require (
-	github.com/gin-gonic/gin v1.9.1
+	github.com/gin-gonic/gin v1.10.0
 	github.com/nextgo/nextgo v0.0.0
 )
 
 replace github.com/nextgo/nextgo => %s
-`
-	nextgoPath := detectNextGoPath()
-	goMod = fmt.Sprintf(goMod, nextgoPath)
+`, absPath)
 
 	goModPath := filepath.Join(b.OutDir, "build", "go.mod")
 	return os.WriteFile(goModPath, []byte(goMod), 0644)
 }
 
-// detectNextGoPath finds the next.go source directory
-func detectNextGoPath() string {
-	gopath := os.Getenv("GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(os.Getenv("USERPROFILE"), "go")
-	}
-
-	locations := []string{
-		filepath.Join(gopath, "src", "github.com", "nextgo", "nextgo"),
-		filepath.Join(os.Getenv("USERPROFILE"), "Documents", "GitHub", "next.go"),
-		filepath.Join(os.Getenv("USERPROFILE"), "go", "src", "github.com", "nextgo", "nextgo"),
-	}
-
-	for _, loc := range locations {
-		if _, err := os.Stat(filepath.Join(loc, "go.mod")); err == nil {
-			return loc
+// detectNextGoPathFallback tries common locations when runtime.Caller fails.
+func detectNextGoPathFallback() string {
+	// Check environment variable first
+	if env := os.Getenv("NEXTGO_SRC"); env != "" {
+		if _, err := os.Stat(filepath.Join(env, "go.mod")); err == nil {
+			return env
 		}
 	}
 
-	return "../../.."
+	// Check relative to the project being built (common case: next.go source is nearby)
+	candidates := []string{
+		"../../..",
+		"../..",
+		"..",
+	}
+
+	for _, c := range candidates {
+		abs, _ := filepath.Abs(c)
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err == nil {
+			// Verify it's the next.go module
+			data, err := os.ReadFile(filepath.Join(abs, "go.mod"))
+			if err == nil && strings.Contains(string(data), "github.com/nextgo/nextgo") {
+				return abs
+			}
+		}
+	}
+
+	return ""
 }
 
 // buildStaticAssets builds and optimizes static assets
@@ -439,7 +517,7 @@ func (b *Builder) generateManifest() error {
 	fmt.Println("  Generating build manifest...")
 
 	manifest := map[string]interface{}{
-		"version": "0.1.0",
+		"version": "0.2.0",
 		"buildId": fmt.Sprintf("%d", time.Now().Unix()),
 		"pages":   b.pages,
 		"files":   b.files,
@@ -452,4 +530,15 @@ func (b *Builder) generateManifest() error {
 
 	manifestPath := filepath.Join(b.OutDir, "build-manifest.json")
 	return os.WriteFile(manifestPath, data, 0644)
+}
+
+// sanitizePkgName converts a directory name to a valid Go package name.
+func sanitizePkgName(name string) string {
+	// Replace hyphens with underscores, remove other invalid chars
+	name = strings.ReplaceAll(name, "-", "_")
+	// Ensure it's a valid Go identifier
+	if len(name) == 0 || (name[0] >= '0' && name[0] <= '9') {
+		name = "pkg" + name
+	}
+	return name
 }

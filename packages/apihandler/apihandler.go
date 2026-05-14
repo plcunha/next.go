@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
+
 // DevServer manages a compiled API server subprocess for dev mode
 type DevServer struct {
 	appDir    string
@@ -22,6 +24,7 @@ type DevServer struct {
 	proxy     *httputil.ReverseProxy
 	mu        sync.Mutex
 	handlers  []handlerInfo
+	nextgoDir string
 }
 
 type handlerInfo struct {
@@ -32,8 +35,9 @@ type handlerInfo struct {
 // New creates a new dev API server
 func New(appDir string) *DevServer {
 	return &DevServer{
-		appDir: appDir,
-		tmpDir: filepath.Join(appDir, ".next", "dev-api"),
+		appDir:    appDir,
+		tmpDir:    filepath.Join(appDir, ".next", "dev-api"),
+		nextgoDir: nextgoSourceDir(),
 	}
 }
 
@@ -62,7 +66,7 @@ func (d *DevServer) Start() error {
 	}
 
 	// Start subprocess
-	d.cmd = exec.Command(filepath.Join(d.tmpDir, "api-server.exe"))
+	d.cmd = exec.Command(filepath.Join(d.tmpDir, "api-server"))
 	d.cmd.Dir = d.tmpDir
 	d.cmd.Stdout = os.Stdout
 	d.cmd.Stderr = os.Stderr
@@ -74,6 +78,9 @@ func (d *DevServer) Start() error {
 	d.proxy = httputil.NewSingleHostReverseProxy(
 		&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", port)},
 	)
+
+	// Wait briefly for the subprocess to be ready
+	time.Sleep(300 * time.Millisecond)
 
 	return nil
 }
@@ -146,12 +153,12 @@ func (d *DevServer) generateAndCompile(port int) error {
 		if err != nil {
 			return err
 		}
-		// Change "package main" to "package <dir>"
 		dir := filepath.Dir(h.relPath)
 		pkgName := filepath.Base(dir)
 		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
 			pkgName = "root"
 		}
+		pkgName = sanitizePkgName(pkgName)
 		content := strings.Replace(string(data), "package main", "package "+pkgName, 1)
 		os.WriteFile(dst, []byte(content), 0644)
 	}
@@ -162,35 +169,54 @@ func (d *DevServer) generateAndCompile(port int) error {
 		return err
 	}
 
-	// Generate go.mod
-	nextgoPath := detectNextGoPath()
+	// Generate go.mod with proper replace directive
+	nextgoPath := d.nextgoDir
+	if nextgoPath == "" {
+		nextgoPath = detectNextGoPathFallback()
+	}
+	if nextgoPath == "" {
+		return fmt.Errorf("cannot find next.go source — set NEXTGO_SRC env var")
+	}
+	absPath, _ := filepath.Abs(nextgoPath)
+
 	goMod := fmt.Sprintf(`module api-server-dev
 
-go 1.21
+go 1.22
 
 require (
-	github.com/gin-gonic/gin v1.9.1
+	github.com/gin-gonic/gin v1.10.0
 	github.com/nextgo/nextgo v0.0.0
 )
 
 replace github.com/nextgo/nextgo => %s
-`, nextgoPath)
+`, absPath)
 	if err := os.WriteFile(filepath.Join(d.tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		return err
 	}
 
-	// go mod tidy
-	tidy := exec.Command("go", "mod", "tidy")
+	// Copy parent go.sum
+	parentGoSum := filepath.Join(d.nextgoDir, "go.sum")
+	if data, err := os.ReadFile(parentGoSum); err == nil {
+		os.WriteFile(filepath.Join(d.tmpDir, "go.sum"), data, 0644)
+	}
+
+	// go mod tidy (-e ignores packages that can't load, e.g. test deps
+	// needing newer Go toolchains)
+	tidy := exec.Command("go", "mod", "tidy", "-e")
 	tidy.Dir = d.tmpDir
 	tidy.Stdout = os.Stdout
 	tidy.Stderr = os.Stderr
-	tidy.Run()
+	tidy.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if err := tidy.Run(); err != nil {
+		return fmt.Errorf("go mod tidy: %w", err)
+	}
 
 	// Build
-	cmd := exec.Command("go", "build", "-o", "api-server.exe", ".")
+	cmd := exec.Command("go", "build", "-o", "api-server", ".")
 	cmd.Dir = d.tmpDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -214,6 +240,7 @@ func (d *DevServer) generateMain(port int) string {
 		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
 			pkgName = "root"
 		}
+		pkgName = sanitizePkgName(pkgName)
 		importPath := "api-server-dev/handlers/" + dir
 		if importPath == "api-server-dev/handlers/" {
 			importPath = "api-server-dev/handlers"
@@ -235,6 +262,7 @@ func (d *DevServer) generateMain(port int) string {
 		if pkgName == "handlers" || pkgName == "." || pkgName == "" {
 			pkgName = "root"
 		}
+		pkgName = sanitizePkgName(pkgName)
 		sb.WriteString(fmt.Sprintf("\tr.Any(\"%s\", %s.Handler)\n", h.route, pkgName))
 	}
 
@@ -254,37 +282,57 @@ func (d *DevServer) generateMain(port int) string {
 }
 
 func findFreePort() (int, error) {
-	// Try ports 4600-4699
 	for port := 4600; port < 4700; port++ {
 		if isPortFree(port) {
 			return port, nil
 		}
 	}
-	return 0, fmt.Errorf("no free port found")
+	return 0, fmt.Errorf("no free port found in range 4600-4699")
 }
 
 func isPortFree(port int) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
 	if err != nil {
-		return true // Port is free
+		return true
 	}
 	conn.Close()
 	return false
 }
 
-func detectNextGoPath() string {
-	gopath := os.Getenv("GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(os.Getenv("USERPROFILE"), "go")
+// nextgoSourceDir finds the next.go module root using runtime.Caller.
+func nextgoSourceDir() string {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
 	}
-	locations := []string{
-		filepath.Join(gopath, "src", "github.com", "nextgo", "nextgo"),
-		filepath.Join(os.Getenv("USERPROFILE"), "Documents", "GitHub", "next.go"),
+	dir := filepath.Dir(filename)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			abs, _ := filepath.Abs(dir)
+			return abs
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-	for _, loc := range locations {
-		if _, err := os.Stat(filepath.Join(loc, "go.mod")); err == nil {
-			return loc
+	return ""
+}
+
+func detectNextGoPathFallback() string {
+	if env := os.Getenv("NEXTGO_SRC"); env != "" {
+		if _, err := os.Stat(filepath.Join(env, "go.mod")); err == nil {
+			return env
 		}
 	}
-	return "../../.."
+	return ""
+}
+
+func sanitizePkgName(name string) string {
+	name = strings.ReplaceAll(name, "-", "_")
+	if len(name) == 0 || (name[0] >= '0' && name[0] <= '9') {
+		name = "pkg" + name
+	}
+	return name
 }

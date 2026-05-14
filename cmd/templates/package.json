@@ -1,0 +1,10 @@
+{
+  "name": "my-nextgo-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nextgo dev",
+    "build": "nextgo build",
+    "start": "nextgo start"
+  }
+}

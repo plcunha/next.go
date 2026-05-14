@@ -18,23 +18,39 @@ import (
 	"github.com/nextgo/nextgo/packages/watcher"
 )
 
+// PagePropsFunc is a function that fetches data for a page before rendering.
+// Pages can optionally implement this pattern by placing a .go file alongside
+// their .go.html template that exports a Props function.
+//
+// Example (app/blog/[id]/page.go alongside page.go.html):
+//
+//	package blog
+//	func Props(c *gin.Context) gin.H {
+//	    id := c.Param("id")
+//	    post := fetchPost(id)
+//	    return gin.H{"post": post, "title": post.Title}
+//	}
+type PagePropsFunc func(c *gin.Context) gin.H
+
 // Server represents the Next.go server
 type Server struct {
-	Router      *router.Router
-	AppDir      string
-	Port        string
-	DevMode     bool
-	gin         *gin.Engine
-	apiDev      *apihandler.DevServer
-	mu          sync.RWMutex
+	Router     *router.Router
+	AppDir     string
+	Port       string
+	DevMode    bool
+	gin        *gin.Engine
+	apiDev     *apihandler.DevServer
+	mu         sync.RWMutex
+	propsFuncs map[string]PagePropsFunc
 }
 
 // New creates a new server instance
 func New(appDir string) *Server {
 	s := &Server{
-		AppDir:  appDir,
-		Port:    ":3000",
-		DevMode: true,
+		AppDir:     appDir,
+		Port:       ":3000",
+		DevMode:    true,
+		propsFuncs: make(map[string]PagePropsFunc),
 	}
 
 	// Load config if exists
@@ -96,7 +112,6 @@ func (s *Server) Start(port string) error {
 		go watcher.Watch(s.AppDir, func() {
 			fmt.Println("🔄 File changed, re-scanning routes...")
 			s.Router.Scan()
-			// Reload API handlers if they changed
 			if s.apiDev != nil {
 				if err := s.apiDev.Reload(); err != nil {
 					fmt.Printf("  ⚠️ API reload: %v\n", err)
@@ -120,7 +135,6 @@ func (s *Server) registerRoutes() {
 	for path, route := range routes {
 		handler := s.createHandler(route)
 
-		// Register for all methods
 		for _, method := range route.Methods {
 			switch method {
 			case "GET":
@@ -157,9 +171,9 @@ func (s *Server) renderRoute(c *gin.Context, route *router.Route) {
 	}
 }
 
-// renderPage renders a page with SSR
+// renderPage renders a page with SSR, including optional data fetching
+// via getServerSideProps pattern (Props() function in page package).
 func (s *Server) renderPage(c *gin.Context, route *router.Route) {
-	// Read page content
 	content, err := os.ReadFile(route.FilePath)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "Error reading file: %v", err)
@@ -168,7 +182,7 @@ func (s *Server) renderPage(c *gin.Context, route *router.Route) {
 
 	pageContent := string(content)
 
-	// Try to find and apply layout
+	// Apply layout
 	layout := s.findLayout(filepath.Dir(route.FilePath))
 	if layout != "" {
 		pageContent = strings.Replace(layout, "{{.children}}", pageContent, 1)
@@ -181,10 +195,22 @@ func (s *Server) renderPage(c *gin.Context, route *router.Route) {
 		return
 	}
 
-	// Prepare data
+	// Prepare data — base template variables
 	data := gin.H{
 		"title": titleFromPath(route.Path),
 		"path":  c.Request.URL.Path,
+		"route": route.Path,
+	}
+
+	// Check for getServerSideProps — look for a .go file alongside the page
+	// that exports a Props function. In a full implementation this would
+	// use Go plugins or code generation; for now we enable the pattern via
+	// explicit registration.
+	if propsFunc, ok := s.propsFuncs[route.Path]; ok {
+		props := propsFunc(c)
+		for k, v := range props {
+			data[k] = v
+		}
 	}
 
 	// Execute template
@@ -197,9 +223,16 @@ func (s *Server) renderPage(c *gin.Context, route *router.Route) {
 	}
 }
 
+// RegisterProps registers a getServerSideProps function for a route.
+// This allows pages to fetch data at request time before rendering.
+func (s *Server) RegisterProps(routePath string, fn PagePropsFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.propsFuncs[routePath] = fn
+}
+
 // renderAPI renders an API route
 func (s *Server) renderAPI(c *gin.Context, route *router.Route) {
-	// Proxy to compiled API dev server if available
 	if s.apiDev != nil && s.apiDev.HasHandlers() {
 		if proxy := s.apiDev.Proxy(); proxy != nil {
 			proxy.ServeHTTP(c.Writer, c.Request)
@@ -207,7 +240,6 @@ func (s *Server) renderAPI(c *gin.Context, route *router.Route) {
 		}
 	}
 
-	// Fallback: return placeholder
 	c.JSON(http.StatusOK, gin.H{
 		"route":   route.Path,
 		"method":  c.Request.Method,
@@ -217,7 +249,6 @@ func (s *Server) renderAPI(c *gin.Context, route *router.Route) {
 
 // findLayout finds the nearest layout file
 func (s *Server) findLayout(dir string) string {
-	// Walk up the directory tree to find layout.go.html
 	for {
 		layoutPath := filepath.Join(dir, "layout.go.html")
 		if _, err := os.Stat(layoutPath); err == nil {
@@ -225,7 +256,6 @@ func (s *Server) findLayout(dir string) string {
 			return string(content)
 		}
 
-		// Move up one directory
 		parent := filepath.Dir(dir)
 		if parent == dir || parent == s.Router.PagesDir || parent == "." {
 			break
@@ -233,7 +263,6 @@ func (s *Server) findLayout(dir string) string {
 		dir = parent
 	}
 
-	// Return default layout
 	return `<!DOCTYPE html>
 <html><head><title>{{.title}}</title></head>
 <body>{{.children}}</body></html>`
@@ -243,7 +272,6 @@ func (s *Server) findLayout(dir string) string {
 func (s *Server) handleRequest(c *gin.Context) {
 	path := c.Request.URL.Path
 
-	// Try to find a matching page
 	pagePath := filepath.Join(s.Router.PagesDir, path, "page.go.html")
 	if _, err := os.Stat(pagePath); err == nil {
 		route := &router.Route{
@@ -255,7 +283,6 @@ func (s *Server) handleRequest(c *gin.Context) {
 		return
 	}
 
-	// Try just the path as a file
 	pagePath = filepath.Join(s.Router.PagesDir, path+".go.html")
 	if _, err := os.Stat(pagePath); err == nil {
 		route := &router.Route{
@@ -267,7 +294,6 @@ func (s *Server) handleRequest(c *gin.Context) {
 		return
 	}
 
-	// 404
 	c.String(http.StatusNotFound, "404 - Page not found: %s", path)
 }
 
@@ -291,7 +317,6 @@ func titleFromPath(path string) string {
 	if last := strings.LastIndex(p, "/"); last >= 0 {
 		p = p[last+1:]
 	}
-	// Convert kebab-case or snake_case to Title Case
 	p = strings.ReplaceAll(p, "-", " ")
 	p = strings.ReplaceAll(p, "_", " ")
 	return strings.Title(p)

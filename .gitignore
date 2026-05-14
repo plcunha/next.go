@@ -21,6 +21,7 @@ vendor/
 .next/
 dist/
 /build/
+nextgo
 
 # Node.js (if used alongside)
 node_modules/
