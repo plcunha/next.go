@@ -5,24 +5,25 @@ A Go implementation of Next.js concepts — file-system routing, SSR, API routes
 ## Features
 
 - **File-system Routing** — Automatic routing based on directory structure (`[id]`, `[...slug]`)
-- **Server-Side Rendering** — Go templates rendered on the server with layout wrapping
-- **API Routes** — Write Go handlers, compiled and executed in dev and production
+- **Server-Side Rendering** — Go templates rendered on the server with layout wrapping and optional data fetching (`getServerSideProps`)
+- **API Routes** — Write Go handlers, compiled and executed in dev (subprocess) and production (single binary)
 - **Middleware** — Logger, CORS, Security headers built-in
 - **Hot Reload** — File watcher re-scans routes on change
-- **Build System** — Minified HTML + compiled API binary (`app.exe`)
-- **Single Binary Deploy** — `nextgo build` produces ~12MB binary, zero runtime deps
+- **Build System** — Minified SSG pages + compiled API binary (~11MB)
+- **Single Binary Deploy** — `nextgo build` produces standalone binary, zero runtime deps
+- **Embedded Templates** — Default project templates baked into the binary via `go:embed`
 
 ## Installation
 
 ```bash
-go install github.com/nextgo/nextgo@latest
+go install github.com/plcunha/next.go@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/nextgo/nextgo.git
-cd nextgo
+git clone https://github.com/plcunha/next.go.git
+cd next.go
 go build -o nextgo .
 ```
 
@@ -39,8 +40,14 @@ nextgo dev -p 8080        # custom port
 
 ```bash
 nextgo build              # compiles pages + API handlers → .next/
-nextgo start              # serves from .next/
-nextgo start -p 8080      # custom port
+                          # produces .next/server/app (standalone binary)
+
+# Run the compiled binary directly:
+.next/server/app          # http://localhost:3000
+PORT=8080 .next/server/app  # custom port
+
+# Or use the dev server in production mode:
+nextgo start -p 8080
 ```
 
 ## Project Structure
@@ -87,9 +94,9 @@ func Handler(c *gin.Context) {
 ```
 
 In dev mode, handlers are compiled into a subprocess and executed in real time.
-In production, handlers are compiled into the `app.exe` binary.
+In production (`nextgo build`), handlers are compiled into a single standalone binary.
 
-## Templates
+## Templates & SSR
 
 `.go.html` files are Go templates with automatic layout wrapping:
 
@@ -104,7 +111,31 @@ In production, handlers are compiled into the `app.exe` binary.
 </html>
 ```
 
-Available template variables: `{{.title}}`, `{{.path}}`, `{{.children}}` (layout only).
+Available template variables: `{{.title}}`, `{{.path}}`, `{{.route}}`, `{{.children}}` (layout only).
+
+### getServerSideProps (data fetching)
+
+Pages can fetch data at request time by registering a `Props` function:
+
+```go
+// app/posts/[id]/page.go (alongside page.go.html)
+package posts
+
+import "github.com/gin-gonic/gin"
+
+func Props(c *gin.Context) gin.H {
+    id := c.Param("id")
+    post := fetchPost(id) // your data fetching logic
+    return gin.H{"post": post, "title": post.Title}
+}
+```
+
+Register in your `main.go` or init:
+
+```go
+s := server.New(".")
+s.RegisterProps("/posts/:id", posts.Props)
+```
 
 ## Configuration
 
@@ -135,14 +166,16 @@ Active in dev and production:
 | Feature | Status |
 |---|---|
 | File-system Routing | ✅ |
-| SSR (dev) | ✅ |
-| SSG (build) | ✅ |
-| API Routes (dev) | ✅ |
-| API Routes (build) | ✅ |
+| SSR with layout wrapping | ✅ |
+| SSG (build → minified HTML) | ✅ |
+| API Routes (dev, subprocess) | ✅ |
+| API Routes (build, single binary) | ✅ |
+| getServerSideProps | ✅ |
 | Middleware | ✅ |
 | Hot Reload | ✅ |
-| Build → Binary | ✅ |
-| `go install` | ✅ |
+| Build → Binary (~11MB) | ✅ |
+| Embedded templates (go:embed) | ✅ |
+| `go test` suite (7 tests) | ✅ |
 
 ## Documentation
 
